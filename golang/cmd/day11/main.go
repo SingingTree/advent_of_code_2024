@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	_ "embed"
+	"github.com/samber/lo"
 	"log"
 	"strconv"
 	"strings"
@@ -85,6 +86,7 @@ func blinkToDepth(
 			for _, blinkedStone := range blinkedStones {
 				newFrontier = append(newFrontier, blinkedStone)
 			}
+			newFrontier = lo.Uniq(newFrontier)
 		}
 		frontier = newFrontier
 		depthLeft -= 1
