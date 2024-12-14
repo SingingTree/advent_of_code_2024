@@ -102,72 +102,11 @@ func (cm *clawMachine) subGame(c coordinate) clawMachine {
 	}
 }
 
-//type button int
-//
-//const (
-//	buttonA = iota
-//	buttonB
-//)
-
 type clawMachineMoveChain struct {
 	aPressCount         int
 	bPressCount         int
 	currentClawPosition coordinate
 	cost                int
-}
-
-// A moveChainPriorityQueue implements heap.Interface and holds clawMachineMoveChain.
-type moveChainPriorityQueue struct {
-	chains []*clawMachineMoveChain
-	cm     *clawMachine
-}
-
-func (pq moveChainPriorityQueue) Len() int { return len(pq.chains) }
-
-func (pq moveChainPriorityQueue) Less(i, j int) bool {
-	// We want Pop to give us the lowest cost so we use less than here.
-	//iCost := pq.chains[i].cost
-	//iDistanceToGoal := pq.cm.prizeLocation.sub(pq.chains[i].currentClawPosition)
-	//iButtonBXMoves := iDistanceToGoal.x / pq.cm.buttonBMove.x
-	//iButtonBYMoves := iDistanceToGoal.y / pq.cm.buttonBMove.y
-	//var iHeuristicCost int
-	//if iButtonBXMoves < iButtonBYMoves {
-	//	iHeuristicCost = iButtonBXMoves * buttonBCost
-	//} else {
-	//	iHeuristicCost = iButtonBYMoves * buttonBCost
-	//}
-	//iCost += iHeuristicCost
-	//
-	//jCost := pq.chains[j].cost
-	//jDistanceToGoal := pq.cm.prizeLocation.sub(pq.chains[j].currentClawPosition)
-	//jButtonBXMoves := jDistanceToGoal.x / pq.cm.buttonBMove.x
-	//jButtonBYMoves := jDistanceToGoal.y / pq.cm.buttonBMove.y
-	//var jHeuristicCost int
-	//if jButtonBXMoves < jButtonBYMoves {
-	//	jHeuristicCost = jButtonBXMoves * buttonBCost
-	//} else {
-	//	jHeuristicCost = jButtonBYMoves * buttonBCost
-	//}
-	//jCost += jHeuristicCost
-
-	return pq.chains[i].cost < pq.chains[j].cost
-}
-
-func (pq moveChainPriorityQueue) Swap(i, j int) {
-	pq.chains[i], pq.chains[j] = pq.chains[j], pq.chains[i]
-}
-
-func (pq *moveChainPriorityQueue) Push(x any) {
-	moveChain := x.(*clawMachineMoveChain)
-	pq.chains = append(pq.chains, moveChain)
-}
-
-func (pq *moveChainPriorityQueue) Pop() any {
-	old := pq.chains
-	n := len(old)
-	moveChain := old[n-1]
-	pq.chains = old[0 : n-1]
-	return moveChain
 }
 
 type presses struct {
