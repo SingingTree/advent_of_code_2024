@@ -2,11 +2,9 @@ package main
 
 import (
 	"bufio"
-	"context"
 	_ "embed"
 	"fmt"
 	"github.com/samber/lo"
-	"github.com/sourcegraph/conc/pool"
 	"regexp"
 	"strconv"
 	"strings"
@@ -217,6 +215,118 @@ func (c *computer) checkIfProgramPrintsSelf() bool {
 	return true
 }
 
+type opcodeAndOperand struct {
+	opcode  int
+	operand int
+}
+
+type registerContentType int
+
+const (
+	literal registerContentType = iota
+	literalModEight
+	unknown
+)
+
+func (c *computer) findRegisterAThatPrintsProgram() int {
+	opcodesAndOperands := make([]opcodeAndOperand, len(c.program)/2)
+	for i := range opcodesAndOperands {
+		opcodesAndOperands[i] = opcodeAndOperand{
+			opcode:  c.program[i*2],
+			operand: c.program[i*2+1],
+		}
+	}
+
+	count := lo.CountBy(opcodesAndOperands, func(oao opcodeAndOperand) bool {
+		return oao.opcode == 0
+	})
+	if count != 1 {
+		panic("Expected 1 adiv")
+	}
+	adivOpAndOperand, _, found := lo.FindIndexOf(opcodesAndOperands, func(oao opcodeAndOperand) bool {
+		return oao.opcode == 0
+	})
+	if !found {
+		panic("Must find adiv op")
+	}
+	if adivOpAndOperand.operand > 3 {
+		panic("Don't expect register operands")
+	}
+	adDivDenominator := intPow(2, adivOpAndOperand.operand)
+
+	reversedOpcodesAndOperands := lo.Reverse(opcodesAndOperands)
+
+	if reversedOpcodesAndOperands[0].opcode != 3 {
+		panic(fmt.Sprintf("Invalid opcode, expected jnz as last op, got: %d", reversedOpcodesAndOperands[0].opcode))
+	}
+	if reversedOpcodesAndOperands[0].operand != 0 {
+		panic(fmt.Sprintf(
+			"Expect jnz to jump to instruction 0, but jumpes to %d, our logic doesn't handle that",
+			reversedOpcodesAndOperands[0].operand,
+		))
+	}
+	for _, oao := range reversedOpcodesAndOperands[1:] {
+		if oao.opcode == 3 {
+			panic("Expected only jnz in program to be at end.")
+		}
+	}
+
+	// Index 0 -> solutions for sub-problem with just last elem of program.
+	// Index 1 -> solutions for sub-problem with last 2 elems of program.
+	// ...
+	// Index len(c.program) - 1 -> solution for whole problem.
+	solutionsForSubproblems := make([][]int, len(c.program))
+	var lastSolutions []int
+	for i := range solutionsForSubproblems {
+		var candidateSolutions []int
+		if lastSolutions == nil {
+			candidateSolutions = make([]int, 0)
+			for i := 1; i < adDivDenominator; i++ {
+				candidateSolutions = append(candidateSolutions, i)
+			}
+		} else {
+			for _, lastSolution := range lastSolutions {
+				// For every solution in our last set, we add a range of solutions:
+				// - prevSolution * aDivDenominator at the bottom end.
+				// - prevSolution * aDivDenominator + (aDivDenominator - 1) at the top end.
+				// - and all numbers in between.
+				//
+				// An example of why we do so: if our previous solutions were 2 and 4, with a div of 5 then all the
+				// combinations that could lead to 2 or 4 are.
+				// 10, 11, 12, 13, 14, 20, 21, 22, 23, 24. Because
+				// 10 / 5 = 2, 11 / 5 = 2, 12 / 5 = 2, 13 / 5 = 2, 14 / 5 = 2 and
+				// 20 / 5 = 4, 21 / 5 = 4, 22 / 5 = 4, 23 / 5 = 4, 24 / 5 = 4.
+				//
+				// The calculations here are the same as the long form example, and derive all potential candidates
+				// that would lead to the solutions the next previous solutions.
+				base := lastSolution * adDivDenominator
+				for i := range adDivDenominator {
+					candidateSolutions = append(candidateSolutions, base+i)
+				}
+			}
+		}
+		actualSolutions := make([]int, 0)
+		subProblemOutputIndex := i + 1
+		subProblemOutput := c.program[len(c.program)-subProblemOutputIndex]
+		for i := range candidateSolutions {
+			c.outputBuffer = make([]int, 0)
+			c.registerA = candidateSolutions[i]
+			c.registerB = 0
+			c.registerC = 0
+			c.instructionPointer = 0
+			for len(c.outputBuffer) == 0 && c.instructionPointer < len(c.program)-2 /* stop before last jump */ {
+				c.runInstruction()
+			}
+			if len(c.outputBuffer) > 0 && c.outputBuffer[0] == subProblemOutput {
+				actualSolutions = append(actualSolutions, candidateSolutions[i])
+			}
+		}
+		solutionsForSubproblems[i] = actualSolutions
+		lastSolutions = actualSolutions
+	}
+	return lo.Min(solutionsForSubproblems[len(solutionsForSubproblems)-1])
+}
+
 func newComputer(registerA int, registerB int, registerC int, program []int) computer {
 	return computer{
 		registerA:          registerA,
@@ -264,22 +374,6 @@ func main() {
 	comp.runProgram()
 
 	// Part 2.
-	ctx, cancel := context.WithCancel(context.Background())
-	concurrencyPool := pool.New().WithContext(ctx)
-
-	for i := range 4_000_000_000_000 {
-		concurrencyPool.Go(func(ctx context.Context) error {
-			comp = newComputer(i, registerB, registerC, program)
-			if comp.checkIfProgramPrintsSelf() {
-				println(i)
-				cancel()
-			}
-			return nil
-		})
-
-	}
-	err := concurrencyPool.Wait()
-	if err != nil {
-		panic(err)
-	}
+	comp = newComputer(registerA, registerB, registerC, program)
+	println(comp.findRegisterAThatPrintsProgram())
 }
