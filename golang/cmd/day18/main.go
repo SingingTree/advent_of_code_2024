@@ -18,7 +18,9 @@ type coordinate struct {
 }
 
 type memory struct {
-	memory [][]int
+	memory            [][]int
+	corruptedBytes    []coordinate
+	numCorruptedBytes int
 }
 
 func newMemory(width int, height int, corruptedBytes []coordinate, numBytes int) memory {
@@ -30,7 +32,9 @@ func newMemory(width int, height int, corruptedBytes []coordinate, numBytes int)
 		memoryRows[corruptedBytes[i].row][corruptedBytes[i].col] = -1
 	}
 	return memory{
-		memory: memoryRows,
+		memory:            memoryRows,
+		corruptedBytes:    corruptedBytes,
+		numCorruptedBytes: numBytes,
 	}
 }
 
@@ -94,7 +98,7 @@ func (mc *moveChain) addMove(c coordinate) moveChain {
 	}
 }
 
-func (m *memory) findPath() moveChain {
+func (m *memory) findPath() (*moveChain, bool) {
 	coordToCost := make(map[coordinate]int)
 	coordToCost[coordinate{row: 0, col: 0}] = 0
 
@@ -140,7 +144,38 @@ func (m *memory) findPath() moveChain {
 	slices.SortFunc(goalPaths, func(a moveChain, b moveChain) int {
 		return a.cost() - b.cost()
 	})
-	return goalPaths[0]
+	if len(goalPaths) > 0 {
+		return &goalPaths[0], true
+	}
+	return nil, false
+}
+
+func (m *memory) findBlockingCorruption() coordinate {
+	// Default corruption is solvable for given problems.
+	highestSolvable := m.numCorruptedBytes
+	// Assume max corruption is not solvable.
+	lowestCorrupted := len(m.corruptedBytes)
+
+	// Binary search the remaning space
+	nextNumCorruptedBytes := highestSolvable + ((lowestCorrupted - highestSolvable) / 2)
+	for lowestCorrupted-highestSolvable > 1 {
+		corruptedMemory := newMemory(
+			len(m.memory),
+			len(m.memory[0]),
+			m.corruptedBytes,
+			nextNumCorruptedBytes,
+		)
+		_, canSolve := corruptedMemory.findPath()
+		if canSolve {
+			highestSolvable = nextNumCorruptedBytes
+		} else {
+			lowestCorrupted = nextNumCorruptedBytes
+		}
+		nextNumCorruptedBytes = highestSolvable + ((lowestCorrupted - highestSolvable) / 2)
+	}
+
+	// Offset by one because 1 corruption above is the 0th corruption in the list and so on.
+	return m.corruptedBytes[lowestCorrupted-1]
 }
 
 func (m *memory) print() {
@@ -184,9 +219,14 @@ func main() {
 		badBytes = append(badBytes, handleLine(scanner.Text()))
 	}
 
+	// Part 1.
 	dimension := 71
 	mem := newMemory(dimension, dimension, badBytes, 1024)
-	mem.print()
-	path := mem.findPath()
+	path, _ := mem.findPath()
 	println(path.cost())
+
+	// Part 2.
+	blockingByte := mem.findBlockingCorruption()
+	println(blockingByte.col, ", ", blockingByte.row)
+
 }
