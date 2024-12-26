@@ -4,7 +4,11 @@ go 1.23
 
 require github.com/samber/lo v1.47.0
 
-require github.com/sourcegraph/conc v0.3.0
+require (
+	github.com/dominikbraun/graph v0.23.0
+	github.com/sourcegraph/conc v0.3.0
+	gonum.org/v1/gonum v0.15.1
+)
 
 require (
 	go.uber.org/atomic v1.7.0 // indirect
