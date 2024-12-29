@@ -70,7 +70,6 @@ func (c *coordinate) applyMove(m move) *coordinate {
 // Returns a list of list of moves. Each inner list is a set of viable moves to
 // reach the desired location.
 func (c *coordinate) movesToOther(other coordinate, unsafeCoordinate coordinate) [][]move {
-	//movesCandidates := make([][]move, 0)
 	rowDiff := c.row - other.row
 	goingDown := rowDiff < 0
 	if goingDown {
@@ -133,7 +132,7 @@ func (c *coordinate) movesToOther(other coordinate, unsafeCoordinate coordinate)
 		return true
 	}
 
-	// Filter out any moves that go via the unsfae coordinate.
+	// Filter out any moves that go via the unsafe coordinate.
 	filteredMoves := lo.Filter(moves, func(moves []move, _ int) bool {
 		if moves == nil {
 			return false
@@ -158,27 +157,6 @@ func (c *coordinate) movesToOther(other coordinate, unsafeCoordinate coordinate)
 	}
 
 	return uniqMoves
-
-	//sameRowAsUnsafe := c.row == unsafeCoordinate.row
-	//sameColAsUnsafe := c.col == unsafeCoordinate.col
-	//if sameRowAsUnsafe && sameColAsUnsafe {
-	//	panic("Unreachable, this means we're on the unsafe coordinate already!")
-	//}
-	//if !sameColAsUnsafe {
-	//	// Because we're not on an unsafe col, it's safe to do the row moves
-	//	// first. This is because no amount of row moves will put us onto the
-	//	// unsafe coordinate.
-	//	moveCandidate := append(slices.Clone(rowMoves), colMoves...)
-	//	movesCandidates = append(movesCandidates, moveCandidate)
-	//}
-	//if !sameRowAsUnsafe {
-	//	// As above, since we're not on the unsafe row, it's safe for us to do
-	//	// col moves before row moves.
-	//	moveCandidate := append(slices.Clone(colMoves), rowMoves...)
-	//	movesCandidates = append(movesCandidates, moveCandidate)
-	//}
-	//
-	//return movesCandidates
 }
 
 type fromToStringPair struct {
@@ -255,33 +233,46 @@ func getArrowKeypadMoveMap() map[fromToStringPair][][]move {
 }
 
 type moveFinder struct {
-	currentNumericKey           string
-	currentFirstArrowKeypadKey  string
-	currentSecondArrowKeypadKey string
-	currentThirdArrowKeypadKey  string
-	numericKeypadMoves          map[fromToStringPair][][]move
-	arrowKeypadMoves            map[fromToStringPair][][]move
+	currentNumericKey      string
+	numArrowKeypads        int
+	currentArrowKeypadKeys []string
+	numericKeypadMoves     map[fromToStringPair][][]move
+	arrowKeypadMoves       map[fromToStringPair][][]move
+	// optimalMoves contains the cost for a given string of moves at a given
+	// level. Level 0 is the arrow keypad closest to the numeric keypad, while
+	// level n == numArrowKeypads - 1 is the arrow keypad furthest from the
+	// numeric keypad.
+	optimalMoves []map[string]int
 }
 
-func newMoveFinder() moveFinder {
-	return moveFinder{
-		currentNumericKey:           "A",
-		currentFirstArrowKeypadKey:  "A",
-		currentSecondArrowKeypadKey: "A",
-		currentThirdArrowKeypadKey:  "A",
-		numericKeypadMoves:          getNumericKeypadMoveMap(),
-		arrowKeypadMoves:            getArrowKeypadMoveMap(),
+func newMoveFinder(numArrows int) moveFinder {
+	currentArrowKeypadKeys := make([]string, numArrows)
+	for i := range numArrows {
+		currentArrowKeypadKeys[i] = "A"
 	}
+	optimalMoves := make([]map[string]int, numArrows)
+	for i := range optimalMoves {
+		optimalMoves[i] = make(map[string]int)
+	}
+
+	mf := moveFinder{
+		currentNumericKey:      "A",
+		numArrowKeypads:        numArrows,
+		currentArrowKeypadKeys: currentArrowKeypadKeys,
+		numericKeypadMoves:     getNumericKeypadMoveMap(),
+		arrowKeypadMoves:       getArrowKeypadMoveMap(),
+		optimalMoves:           optimalMoves,
+	}
+
+	return mf
 }
 
 func (mf *moveFinder) clone() moveFinder {
 	return moveFinder{
-		currentNumericKey:           mf.currentNumericKey,
-		currentFirstArrowKeypadKey:  mf.currentFirstArrowKeypadKey,
-		currentSecondArrowKeypadKey: mf.currentSecondArrowKeypadKey,
-		currentThirdArrowKeypadKey:  mf.currentThirdArrowKeypadKey,
-		numericKeypadMoves:          mf.numericKeypadMoves,
-		arrowKeypadMoves:            mf.arrowKeypadMoves,
+		currentNumericKey:      mf.currentNumericKey,
+		currentArrowKeypadKeys: slices.Clone(mf.currentArrowKeypadKeys),
+		numericKeypadMoves:     mf.numericKeypadMoves,
+		arrowKeypadMoves:       mf.arrowKeypadMoves,
 	}
 }
 
@@ -326,25 +317,25 @@ func (mf *moveFinder) pressNumericMultipleTimes(numericKeys []string) [][]move {
 	return moves
 }
 
-func (mf *moveFinder) pressFirstArrows(arrowKey string) [][]move {
+func (mf *moveFinder) pressArrows(arrowKey string, keypadIndex int) [][]move {
 	fromTo := fromToStringPair{
-		from: mf.currentFirstArrowKeypadKey,
+		from: mf.currentArrowKeypadKeys[keypadIndex],
 		to:   arrowKey,
 	}
 	arrowMoveCandidates, ok := mf.arrowKeypadMoves[fromTo]
 	if !ok {
 		panic("Unrecognized keys")
 	}
-	mf.currentFirstArrowKeypadKey = arrowKey
+	mf.currentArrowKeypadKeys[keypadIndex] = arrowKey
 
 	return slices.Clone(arrowMoveCandidates)
 }
 
-func (mf *moveFinder) pressFirstArrowsMultipleTimes(arrowKeys []string) [][]move {
-	if mf.currentFirstArrowKeypadKey != "A" {
+func (mf *moveFinder) pressArrowsMultipleTimes(arrowKeys []string, keypadIndex int) [][]move {
+	if mf.currentArrowKeypadKeys[keypadIndex] != "A" {
 		panic("Should always start on A")
 	}
-	initialMoves := mf.pressFirstArrows(arrowKeys[0])
+	initialMoves := mf.pressArrows(arrowKeys[0], keypadIndex)
 	moves := make([][]move, len(initialMoves))
 	for i := range initialMoves {
 		moves[i] = slices.Clone(initialMoves[i])
@@ -352,7 +343,7 @@ func (mf *moveFinder) pressFirstArrowsMultipleTimes(arrowKeys []string) [][]move
 	}
 	for _, m := range arrowKeys[1:] {
 		newMoves := make([][]move, 0)
-		moreMoves := mf.pressFirstArrows(m)
+		moreMoves := mf.pressArrows(m, keypadIndex)
 		for _, moreMoveChain := range moreMoves {
 			for _, existingMoveChain := range moves {
 				newMoves = append(newMoves, append(slices.Clone(existingMoveChain), moreMoveChain...))
@@ -367,98 +358,69 @@ func (mf *moveFinder) pressFirstArrowsMultipleTimes(arrowKeys []string) [][]move
 	return moves
 }
 
-func (mf *moveFinder) pressSecondArrows(arrowKey string) [][]move {
-	fromTo := fromToStringPair{
-		from: mf.currentSecondArrowKeypadKey,
-		to:   arrowKey,
+func (mf *moveFinder) findOptimalMoveOnArrowKeypad(
+	keypadIndex int,
+	// candidateMoves are the move strings coming from lower levels.
+	moves string,
+) int {
+	if cost, ok := mf.optimalMoves[keypadIndex][moves]; ok {
+		return cost
 	}
-	arrowMoveCandidates, ok := mf.arrowKeypadMoves[fromTo]
-	if !ok {
-		panic("Unrecognized keys")
+	if keypadIndex == mf.numArrowKeypads-1 {
+		mf.optimalMoves[keypadIndex][moves] = len(moves)
+		return len(moves)
 	}
-	mf.currentSecondArrowKeypadKey = arrowKey
-
-	return arrowMoveCandidates
-}
-
-func (mf *moveFinder) pressSecondArrowsMultipleTimes(arrowKeys []string) [][]move {
-	if mf.currentSecondArrowKeypadKey != "A" {
-		panic("Should always start on A")
-	}
-	initialMoves := mf.pressSecondArrows(arrowKeys[0])
-	moves := make([][]move, len(initialMoves))
-	for i := range initialMoves {
-		moves[i] = slices.Clone(initialMoves[i])
-		moves[i] = append(moves[i], press)
-	}
-	for _, m := range arrowKeys[1:] {
-		newMoves := make([][]move, 0)
-		moreMoves := mf.pressSecondArrows(m)
-		for _, moreMoveChain := range moreMoves {
-			for _, existingMoveChain := range moves {
-				newMoves = append(newMoves, append(slices.Clone(existingMoveChain), moreMoveChain...))
-			}
+	// Chunk moves smaller so we can cache with finer granularity.
+	subMoves := lo.Filter(strings.SplitAfter(moves, "A"), func(s string, _ int) bool {
+		if s == "" {
+			return false
 		}
-		for i := range newMoves {
-			newMoves[i] = append(newMoves[i], press)
+		return true
+	})
+
+	totalCost := 0
+	for _, subMove := range subMoves {
+		chunkedMoves := lo.ChunkString(subMove, 1)
+		nextLevelMoves := mf.pressArrowsMultipleTimes(chunkedMoves, keypadIndex+1)
+		nextLevelMoveStrings := lo.Map(nextLevelMoves, func(moves []move, _ int) string {
+			return lo.Reduce(moves, func(agg string, item move, _ int) string {
+				return agg + item.toString()
+			}, "")
+		})
+		nextMoveCosts := make([]int, len(nextLevelMoveStrings))
+		for i, moveString := range nextLevelMoveStrings {
+			nextMoveCosts[i] = mf.findOptimalMoveOnArrowKeypad(keypadIndex+1, moveString)
 		}
-		moves = newMoves
+		totalCost += lo.Min(nextMoveCosts)
 	}
-
-	return moves
+	mf.optimalMoves[keypadIndex][moves] = totalCost
+	return totalCost
 }
 
-func (mf *moveFinder) pressThirdArrows(arrowKey string) [][]move {
-	fromTo := fromToStringPair{
-		from: mf.currentThirdArrowKeypadKey,
-		to:   arrowKey,
-	}
-	arrowMoveCandidates, ok := mf.arrowKeypadMoves[fromTo]
-	if !ok {
-		panic("Unrecognized keys")
-	}
-	mf.currentThirdArrowKeypadKey = arrowKey
-
-	return arrowMoveCandidates
-}
-
-func (mf *moveFinder) deriveNumericPresses(desiredNumericKeys []string) []move {
+func (mf *moveFinder) deriveNumericPresses(desiredNumericKeys []string) int {
+	// Handle first level of presses.
 	numericMoveCandidates := mf.pressNumericMultipleTimes(desiredNumericKeys)
 	firstArrowPresses := make([][]move, 0)
 	for _, nmc := range numericMoveCandidates {
 		nmcString := lo.Map(nmc, func(m move, _ int) string {
 			return m.toString()
 		})
-		someFirstArrowPresses := mf.pressFirstArrowsMultipleTimes(nmcString)
+		someFirstArrowPresses := mf.pressArrowsMultipleTimes(nmcString, 0)
 		firstArrowPresses = append(firstArrowPresses, someFirstArrowPresses...)
 	}
-	shortestLen := len(firstArrowPresses[0])
-	for _, p := range firstArrowPresses {
-		if len(p) < shortestLen {
-			shortestLen = len(p)
-		}
-	}
-	firstArrowPresses = lo.Filter(firstArrowPresses, func(presses []move, _ int) bool {
-		if len(presses) > shortestLen {
-			return false
-		}
-		return true
+	firstArrowPressesAsStrings := lo.Map(firstArrowPresses, func(moves []move, _ int) string {
+		return lo.Reduce(moves, func(agg string, item move, _ int) string {
+			return agg + item.toString()
+		}, "")
 	})
-	secondArrowPresses := make([][]move, 0)
-	for _, fap := range firstArrowPresses {
-		fapString := lo.Map(fap, func(m move, _ int) string {
-			return m.toString()
-		})
-		someSecondArrowPresses := mf.pressSecondArrowsMultipleTimes(fapString)
-		secondArrowPresses = append(secondArrowPresses, someSecondArrowPresses...)
+	lengths := make([]int, len(firstArrowPressesAsStrings))
+	for i := range lengths {
+		lengths[i] = mf.findOptimalMoveOnArrowKeypad(0, firstArrowPressesAsStrings[i])
 	}
-	minSecondPresses := lo.MinBy(secondArrowPresses, func(a []move, b []move) bool {
-		return len(a) < len(b)
-	})
-	return minSecondPresses
+	return lo.Min(lengths)
 }
 
-func (mf *moveFinder) pressForKeys(presses []string) []move {
+func (mf *moveFinder) pressForKeys(presses []string) int {
 	return mf.deriveNumericPresses(presses)
 }
 
@@ -474,11 +436,11 @@ func main() {
 		keyPresses = append(keyPresses, handleLine(scanner.Text()))
 	}
 
-	mf := newMoveFinder()
+	mf := newMoveFinder(2)
 
 	score := 0
 	for i := range keyPresses {
-		moves := mf.pressForKeys(keyPresses[i])
+		moveCost := mf.pressForKeys(keyPresses[i])
 		code := ""
 		for _, s := range keyPresses[i] {
 			code += s
@@ -491,8 +453,32 @@ func main() {
 		if err != nil {
 			panic(err)
 		}
-		score += len(moves) * codeNum
+		score += moveCost * codeNum
 	}
 
+	fmt.Println(score)
+
+	// Part 2
+	mf = newMoveFinder(25)
+
+	score = 0
+	for i := range keyPresses {
+		moveCost := mf.pressForKeys(keyPresses[i])
+		code := ""
+		for _, s := range keyPresses[i] {
+			code += s
+		}
+		code, ok := strings.CutSuffix(code, "A")
+		if !ok {
+			panic("Should always have A suffix!")
+		}
+		codeNum, err := strconv.Atoi(code)
+		if err != nil {
+			panic(err)
+		}
+		score += moveCost * codeNum
+	}
+
+	// 9806252 too low
 	fmt.Println(score)
 }
