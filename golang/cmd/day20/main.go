@@ -144,6 +144,9 @@ func (r *race) inBounds(c coordinate) bool {
 	return true
 }
 
+// populatePathWithoutCheats walks the 'fair' path. This is deterministic for
+// the maps given in the problem. This should be done first, as the code to
+// figure out cheat paths uses the fair path to branch from.
 func (r *race) populatePathWithoutCheats() {
 	solution := r.findNoCheatsSolution()
 	r.pathWithoutCheats = solution
@@ -187,6 +190,8 @@ func (r *race) findAllViableEndCoordinates(s coordinate, clipBudget int) []coord
 			continue
 		}
 		if s.row+rowDelta >= len(r.rawMap) {
+			// rowDelta only grows, so further colDelta values in this loop will continue to fail this check. Just
+			// break to avoid redundant checks.
 			break
 		}
 		absRowDelta := rowDelta
@@ -198,6 +203,8 @@ func (r *race) findAllViableEndCoordinates(s coordinate, clipBudget int) []coord
 				continue
 			}
 			if s.col+colDelta >= len(r.rawMap[0]) {
+				// colDelta only grows, so further colDelta values in this loop will continue to fail this check. Just
+				// break to avoid redundant checks.
 				break
 			}
 			absColDelta := colDelta
@@ -205,7 +212,9 @@ func (r *race) findAllViableEndCoordinates(s coordinate, clipBudget int) []coord
 				absColDelta = -absColDelta
 			}
 			if absRowDelta+absColDelta > clipBudget {
-				break
+				// We're using too much clip budget, try the next values. Note, if we're at a negative value like -9,
+				// the next loop iteration will reduce the absColDelta by going to -8.
+				continue
 			}
 			row := s.row + rowDelta
 			col := s.col + colDelta
@@ -225,69 +234,43 @@ func (r *race) findClips(cheatStart coordinate, clipBudget int) []clip {
 	}
 	clips := make([]clip, 0)
 
-	n := cheatStart.applyTranslation(north)
-	e := cheatStart.applyTranslation(east)
-	s := cheatStart.applyTranslation(south)
-	w := cheatStart.applyTranslation(west)
-	frontier := []coordinate{n, e, s, w}
-	// Filter initial frontier to contain wall tiles.
-	frontier = lo.Filter(frontier, func(c coordinate, _ int) bool {
-		return r.inBounds(c) && r.rawMap[c.row][c.col] == wall
-	})
-
-	for _, wallCoordinate := range frontier {
-		// We don't need to reduce the clip budget for find end coords. We've used 1 moving into the wall, but
-		// the end coordinate code users 1 cost to exit the wall, which 'gives' us that 1 back as it were.
-		ends := r.findAllViableEndCoordinates(wallCoordinate, clipBudget)
-		for _, end := range ends {
-			if end == cheatStart {
-				// Skip ends that move us out to the start of the cheat.
-				continue
-			}
-			if r.cheatlessPathIndexLookup[end] < r.cheatlessPathIndexLookup[cheatStart] {
-				// Skip cheats that move us earlier up the path.
-				continue
-			}
-
-			// Add all the expected coordinates to middle path (including our initial wall and skipping the end).
-			middlePath := make([]coordinate, 0)
-			currentRow := wallCoordinate.row
-			// Walk up or down all the rows we need to get to the end.
-			for currentRow != end.row {
-				middlePath = append(middlePath, coordinate{row: currentRow, col: wallCoordinate.col})
-				if currentRow < end.row {
-					currentRow += 1
-				} else {
-					currentRow -= 1
-				}
-			}
-			if currentRow != end.row {
-				panic("This should be unreachable!")
-			}
-			currentCol := wallCoordinate.col
-			for currentCol != end.col {
-				middlePath = append(middlePath, coordinate{row: currentRow, col: currentCol})
-				if currentCol < end.col {
-					currentCol += 1
-				} else {
-					currentCol -= 1
-				}
-			}
-
-			cheatlessCost := r.cheatlessPathIndexLookup[end] - r.cheatlessPathIndexLookup[cheatStart]
-			if len(middlePath)+1 >= cheatlessCost {
-				// Skip cheats that cost more or the same as the cheatless path.
-				continue
-			}
-
-			clips = append(clips, clip{
-				clipStartAndEnd: clipStartAndEnd{
-					start: cheatStart,
-					end:   end,
-				},
-				middle: middlePath,
-			})
+	ends := r.findAllViableEndCoordinates(cheatStart, clipBudget)
+	for _, end := range ends {
+		if end == cheatStart {
+			// Skip ends that move us out to the start of the cheat.
+			continue
 		}
+		if r.cheatlessPathIndexLookup[end] < r.cheatlessPathIndexLookup[cheatStart] {
+			// Skip cheats that move us earlier up the path.
+			continue
+		}
+
+		// Walk up or down all the rows we need to get to the end.
+		rowDistance := cheatStart.row - end.row
+		if rowDistance < 0 {
+			rowDistance *= -1
+		}
+		colDistance := cheatStart.col - end.col
+		if colDistance < 0 {
+			colDistance *= -1
+		}
+		clipDistance := rowDistance + colDistance
+
+		// cheatlessCost is the cost of getting from cheatStart to end on the normal path.
+		cheatlessCost := r.cheatlessPathIndexLookup[end] - r.cheatlessPathIndexLookup[cheatStart]
+		if clipDistance >= cheatlessCost {
+			// Skip cheats that cost more or the same as the cheatless path.
+			continue
+		}
+
+		clips = append(clips, clip{
+			clipStartAndEnd: clipStartAndEnd{
+				start: cheatStart,
+				end:   end,
+			},
+			clippedDistance: clipDistance,
+			race:            r,
+		})
 	}
 
 	// Todo, this is likely not needed anymore.
@@ -297,40 +280,14 @@ func (r *race) findClips(cheatStart coordinate, clipBudget int) []clip {
 	return trimmedClips
 }
 
-func (r *race) findSolutions(numClips int, perClipWallBudget int) []racePath {
-	if numClips == 0 {
-		return []racePath{
-			r.pathWithoutCheats,
-		}
-	}
-	if numClips != 1 {
-		panic("Not yet setup to handle more than 1 cheat!")
-	}
-
+func (r *race) findSolutions(clipBudget int) []clip {
 	cheatClips := make([]clip, 0)
 
 	for _, c := range r.pathWithoutCheats.path {
-		cheatClips = append(cheatClips, r.findClips(c, perClipWallBudget)...)
+		cheatClips = append(cheatClips, r.findClips(c, clipBudget)...)
 	}
 
-	cheatPaths := make([]racePath, len(cheatClips))
-	for i, cc := range cheatClips {
-		// Clone the path without cheats up to where the cheat starts (non including start).
-		path := slices.Clone(r.pathWithoutCheats.path[:r.cheatlessPathIndexLookup[cc.start]])
-		// Add the cheat start and middle to the path.
-		path = append(path, cc.start)
-		path = append(path, cc.middle...)
-		// Add the rest of the path after the cheat has finished.
-		path = append(path, r.pathWithoutCheats.path[r.cheatlessPathIndexLookup[cc.end]:]...)
-
-		cheatPaths[i] = racePath{
-			race:  r,
-			path:  path,
-			clips: []clip{cc},
-		}
-	}
-
-	return cheatPaths
+	return cheatClips
 }
 
 func (r *race) print() {
@@ -347,29 +304,41 @@ type clipStartAndEnd struct {
 }
 
 type clip struct {
+	race *race
 	clipStartAndEnd
-	middle []coordinate
+	clippedDistance int
+}
+
+func (c clip) cost() int {
+	cheatlessTotalCost := c.race.pathWithoutCheats.cost()
+	costToClipStart := c.race.cheatlessPathIndexLookup[c.start]
+	cheatlessCostToClipEnd := c.race.cheatlessPathIndexLookup[c.end]
+	// cheatlessClipPathCost is the cost the cheatless path takes to go from c.start -> c.end.
+	cheatlessClipPathCost := cheatlessCostToClipEnd - costToClipStart
+	// The savings are the difference between the cheatless distance and the cheated.
+	savings := cheatlessClipPathCost - c.clippedDistance
+	if savings <= 0 {
+		panic("This should be unreachable! We don't create cheats that don't save moves!")
+	}
+	return cheatlessTotalCost - savings
 }
 
 type racePath struct {
-	race  *race
-	path  []coordinate
-	clips []clip
+	race *race
+	path []coordinate
 }
 
 func newRacePath(r *race, numNoClipsAllowed int) racePath {
 	return racePath{
-		race:  r,
-		path:  []coordinate{r.start},
-		clips: make([]clip, 0),
+		race: r,
+		path: []coordinate{r.start},
 	}
 }
 
 func (rp *racePath) extend(c coordinate) racePath {
 	return racePath{
-		race:  rp.race,
-		path:  append(slices.Clone(rp.path), c),
-		clips: slices.Clone(rp.clips),
+		race: rp.race,
+		path: append(slices.Clone(rp.path), c),
 	}
 }
 
@@ -423,11 +392,6 @@ func (rp *racePath) print() {
 	for _, c := range rp.path {
 		mapStringBuffer[c.row][c.col] = "P"
 	}
-	for _, cl := range rp.clips {
-		for _, c := range cl.middle {
-			mapStringBuffer[c.row][c.col] = "C"
-		}
-	}
 	for row := range mapStringBuffer {
 		for col := range mapStringBuffer[row] {
 			fmt.Print(mapStringBuffer[row][col])
@@ -453,68 +417,39 @@ func main() {
 	}
 
 	r := newRace(rawMap)
-	solutionsZeroClips := r.findSolutions(0, 0)
+	solutionsZeroClips := []racePath{r.pathWithoutCheats}
 	slices.SortFunc(solutionsZeroClips, func(a, b racePath) int {
 		return a.cost() - b.cost()
 	})
 	costWithNoCheating := solutionsZeroClips[0].cost()
 
-	solutionsOneClip := r.findSolutions(1, 1)
-	slices.SortFunc(solutionsOneClip, func(a, b racePath) int {
+	solutions2Clip := r.findSolutions(2)
+	slices.SortFunc(solutions2Clip, func(a, b clip) int {
 		return a.cost() - b.cost()
 	})
 	count := 0
-	for _, cheatSolution := range solutionsOneClip {
-		if cheatSolution.cost() == costWithNoCheating-2 {
+	for _, cheatSolution := range solutions2Clip {
+		//if cheatSolution.cost() == costWithNoCheating-2 {
+		if cheatSolution.cost() <= costWithNoCheating-100 {
 			count += 1
 		}
 	}
-	println(count)
+	fmt.Println(count)
 
-	solutions20Clip := r.findSolutions(1, 20)
-	slices.SortFunc(solutionsOneClip, func(a, b racePath) int {
+	// Part 2
+	solutions20Clip := r.findSolutions(20)
+	slices.SortFunc(solutions20Clip, func(a, b clip) int {
 		return a.cost() - b.cost()
 	})
 	count = 0
 	for _, cheatSolution := range solutions20Clip {
-		if cheatSolution.cost() == costWithNoCheating-72 {
-			//fmt.Printf("%v\n", cheatSolution.path)
-			//cheatSolution.print()
-			cheatSolution.validate()
+		//if cheatSolution.cost() == costWithNoCheating-76 {
+		if cheatSolution.cost() <= costWithNoCheating-100 {
 			count += 1
 		}
 	}
-	println(count) // 236481 too low
-}
-
-func (rp *racePath) validate() {
-	for i := 0; i < len(rp.path)-1; i++ {
-		rowDistance := rp.path[i].row - rp.path[i+1].row
-		if rowDistance < 0 {
-			rowDistance *= 1
-		}
-		colDistance := rp.path[i].col - rp.path[i+1].col
-		if colDistance < 0 {
-			colDistance *= 1
-		}
-		if rowDistance+colDistance > 1 {
-			panic("Discontinuity")
-		}
-	}
-	for _, c := range rp.path {
-		if !rp.race.inBounds(c) {
-			panic("Out of bounds")
-		}
-	}
-	if rp.path[0] != rp.race.start {
-		panic("Incorrect start")
-	}
-	if rp.path[len(rp.path)-1] != rp.race.finish {
-		panic("Incorrect finish")
-	}
-	if len(rp.clips) >= 1 {
-		if len(rp.clips[0].middle) > 20 {
-			panic("Clipped too long")
-		}
-	}
+	fmt.Println(count)
+	// 236481 too low
+	// 984009 too low
+	// 1111431 too high
 }
